@@ -57,6 +57,7 @@ import { getBearerToken } from "./http-utils.js";
 import { resolveRequestClientIp } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
+import { createGatewayApiApp } from "./server-api.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
 import {
   authorizeCanvasRequest,
@@ -732,6 +733,8 @@ export function createGatewayHttpServer(opts: {
   getReadiness?: ReadinessChecker;
   tlsOptions?: TlsOptions;
 }): HttpServer {
+  const gatewayApiApp = createGatewayApiApp(opts.resolvedAuth);
+
   const {
     canvasHost,
     clients,
@@ -831,6 +834,36 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
+      requestStages.push({
+        name: "gateway-api",
+        run: async () => {
+          if (!requestPath.startsWith("/api/v1/")) {
+            return false;
+          }
+          const host = req.headers.host ?? "localhost";
+          const url = new URL(req.url ?? "/", `http://${host}`);
+          const fetchRequest = new Request(url.href, {
+            method: req.method,
+            headers: req.headers as HeadersInit,
+            body: req.method !== "GET" && req.method !== "HEAD" ? req : undefined,
+            // @ts-ignore
+            duplex: "half",
+          });
+          const apiRes = await gatewayApiApp.fetch(fetchRequest);
+          res.statusCode = apiRes.status;
+          apiRes.headers.forEach((value, key) => {
+            res.setHeader(key, value);
+          });
+          if (apiRes.body) {
+            // @ts-ignore
+            for await (const chunk of apiRes.body) {
+              res.write(chunk);
+            }
+          }
+          res.end();
+          return true;
+        },
+      });
       if (canvasHost) {
         requestStages.push({
           name: "canvas-auth",
