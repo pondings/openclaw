@@ -91,6 +91,11 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
     description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
     hasSubcommands: true,
   },
+  {
+    name: "pipeline",
+    description: "Run pipelines with isolated execution sessions",
+    hasSubcommands: true,
+  },
 ] as const satisfies ReadonlyArray<CoreCliCommandDescriptor>;
 
 export function getCoreCliCommandDescriptors(): ReadonlyArray<CoreCliCommandDescriptor> {

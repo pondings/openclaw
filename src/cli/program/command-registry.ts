@@ -216,6 +216,19 @@ const coreEntries: CoreCliEntry[] = [
       mod.registerBrowserCli(program);
     },
   },
+  {
+    commands: [
+      {
+        name: "pipeline",
+        description: "Run pipelines with isolated execution sessions",
+        hasSubcommands: true,
+      },
+    ],
+    register: async ({ program }) => {
+      const mod = await import("./register.pipeline.js");
+      mod.registerPipelineCommands(program);
+    },
+  },
 ];
 
 export function getCoreCliCommandNames(): string[] {
