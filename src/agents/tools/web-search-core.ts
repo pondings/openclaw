@@ -843,9 +843,9 @@ function resolveFirecrawlConfig(search?: WebSearchConfig): FirecrawlConfig {
 }
 
 function resolveFirecrawlApiKey(firecrawl?: FirecrawlConfig): string | undefined {
-  const fromConfig = firecrawl?.apiKey;
+  const fromConfig = normalizeSecretInput(firecrawl?.apiKey);
   if (fromConfig) {
-    return normalizeSecretInput(fromConfig);
+    return fromConfig;
   }
   return normalizeSecretInput(process.env.FIRECRAWL_API_KEY);
 }
@@ -1371,9 +1371,9 @@ async function runFirecrawlSearch(params: {
       }
       const results = Array.isArray(data.data) ? data.data : [];
       return results.map((entry) => ({
-        title: entry.title ?? "",
+        title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
         url: entry.url ?? "",
-        description: entry.description ?? "",
+        description: entry.description ? wrapWebContent(entry.description, "web_search") : "",
         siteName: resolveSiteName(entry.url ?? "") || undefined,
       }));
     },
