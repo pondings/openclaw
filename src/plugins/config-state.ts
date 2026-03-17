@@ -76,6 +76,8 @@ function normalizePluginId(id: string): string {
   return PLUGIN_ID_ALIASES[trimmed] ?? trimmed;
 }
 
+export { normalizePluginId };
+
 const normalizeList = (value: unknown): string[] => {
   if (!Array.isArray(value)) {
     return [];

@@ -2,6 +2,7 @@ import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
 import {
+  normalizePluginId,
   normalizePluginsConfig,
   resolveEffectiveEnableState,
   resolveMemorySlotDecision,
@@ -513,7 +514,8 @@ function validateConfigObjectWithPluginsBase(
     if (typeof pluginId !== "string" || !pluginId.trim()) {
       continue;
     }
-    if (!knownIds.has(pluginId)) {
+    const normalizedPluginId = normalizePluginId(pluginId);
+    if (!knownIds.has(normalizedPluginId)) {
       pushMissingPluginIssue("plugins.allow", pluginId);
     }
   }
@@ -523,7 +525,8 @@ function validateConfigObjectWithPluginsBase(
     if (typeof pluginId !== "string" || !pluginId.trim()) {
       continue;
     }
-    if (!knownIds.has(pluginId)) {
+    const normalizedPluginId = normalizePluginId(pluginId);
+    if (!knownIds.has(normalizedPluginId)) {
       pushMissingPluginIssue("plugins.deny", pluginId);
     }
   }
