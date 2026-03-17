@@ -22,7 +22,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
+const SEARCH_PROVIDERS = ["brave", "firecrawl", "gemini", "grok", "kimi", "perplexity"] as const;
 type SearchProvider = (typeof SEARCH_PROVIDERS)[number];
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
@@ -44,6 +44,8 @@ const KIMI_WEB_SEARCH_TOOL = {
   type: "builtin_function",
   function: { name: "$web_search" },
 } as const;
+
+const DEFAULT_FIRECRAWL_BASE_URL = "https://api.firecrawl.dev";
 
 const SEARCH_CACHE_KEY = Symbol.for("openclaw.web-search.cache");
 
@@ -289,10 +291,16 @@ function createWebSearchSchema(params: {
     });
   }
 
+  if (params.provider === "firecrawl") {
+    return Type.Object({
+      ...querySchema,
+      language: filterSchema.language,
+    });
+  }
+
   // grok, gemini, kimi, etc.
   return Type.Object({
     ...querySchema,
-    ...filterSchema,
   });
 }
 
@@ -345,6 +353,21 @@ type KimiConfig = {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+};
+
+type FirecrawlConfig = {
+  apiKey?: string;
+  baseUrl?: string;
+};
+
+type FirecrawlSearchResponse = {
+  success?: boolean;
+  data?: Array<{
+    title?: string;
+    url?: string;
+    description?: string;
+  }>;
+  error?: string;
 };
 
 type GrokSearchResponse = {
@@ -607,6 +630,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "firecrawl") {
+    return {
+      error: "missing_firecrawl_api_key",
+      message:
+        "web_search (firecrawl) needs a Firecrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure tools.web.search.firecrawl.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   return {
     error: "missing_perplexity_api_key",
     message:
@@ -638,6 +669,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
   if (raw === "perplexity") {
     return "perplexity";
+  }
+  if (raw === "firecrawl") {
+    return "firecrawl";
   }
 
   // Auto-detect provider from available API keys (alphabetical order)
@@ -672,6 +706,14 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
         'web_search: no provider configured, auto-detected "kimi" from available API keys',
       );
       return "kimi";
+    }
+    // Firecrawl
+    const firecrawlConfig = resolveFirecrawlConfig(search);
+    if (resolveFirecrawlApiKey(firecrawlConfig)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "firecrawl" from available API keys',
+      );
+      return "firecrawl";
     }
     // Perplexity
     const perplexityConfig = resolvePerplexityConfig(search);
@@ -787,6 +829,29 @@ function resolvePerplexityModel(perplexity?: PerplexityConfig): string {
       ? perplexity.model.trim()
       : "";
   return fromConfig || DEFAULT_PERPLEXITY_MODEL;
+}
+
+function resolveFirecrawlConfig(search?: WebSearchConfig): FirecrawlConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const firecrawl = "firecrawl" in search ? search.firecrawl : undefined;
+  if (!firecrawl || typeof firecrawl !== "object") {
+    return {};
+  }
+  return firecrawl as FirecrawlConfig;
+}
+
+function resolveFirecrawlApiKey(firecrawl?: FirecrawlConfig): string | undefined {
+  const fromConfig = normalizeSecretInput(firecrawl?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  return normalizeSecretInput(process.env.FIRECRAWL_API_KEY);
+}
+
+function resolveFirecrawlBaseUrl(firecrawl?: FirecrawlConfig): string {
+  return firecrawl?.baseUrl?.trim() || DEFAULT_FIRECRAWL_BASE_URL;
 }
 
 function isDirectPerplexityBaseUrl(baseUrl: string): boolean {
@@ -1264,6 +1329,57 @@ async function runPerplexitySearchApi(params: {
   );
 }
 
+async function runFirecrawlSearch(params: {
+  query: string;
+  apiKey: string;
+  baseUrl: string;
+  count: number;
+  timeoutSeconds: number;
+  language?: string;
+}): Promise<Array<{ title: string; url: string; description: string; siteName?: string }>> {
+  const baseUrl = params.baseUrl.replace(/\/$/, "");
+  const endpoint = `${baseUrl}/v1/search`;
+
+  const body: Record<string, unknown> = {
+    query: params.query,
+    limit: params.count,
+  };
+  if (params.language) {
+    body.lang = params.language;
+  }
+
+  return withTrustedWebSearchEndpoint(
+    {
+      url: endpoint,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${params.apiKey}`,
+        },
+        body: JSON.stringify(body),
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        return await throwWebSearchApiError(res, "Firecrawl");
+      }
+      const data = (await res.json()) as FirecrawlSearchResponse;
+      if (!data.success) {
+        throw new Error(data.error || "Firecrawl search failed");
+      }
+      const results = Array.isArray(data.data) ? data.data : [];
+      return results.map((entry) => ({
+        title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
+        url: entry.url ?? "",
+        description: entry.description ? wrapWebContent(entry.description, "web_search") : "",
+        siteName: resolveSiteName(entry.url ?? "") || undefined,
+      }));
+    },
+  );
+}
+
 async function runPerplexitySearch(params: {
   query: string;
   apiKey: string;
@@ -1620,6 +1736,7 @@ async function runWebSearch(params: {
   geminiModel?: string;
   kimiBaseUrl?: string;
   kimiModel?: string;
+  firecrawlBaseUrl?: string;
   braveMode?: "web" | "llm-context";
 }): Promise<Record<string, unknown>> {
   const effectiveBraveMode = params.braveMode ?? "web";
@@ -1632,7 +1749,9 @@ async function runWebSearch(params: {
           ? (params.geminiModel ?? DEFAULT_GEMINI_MODEL)
           : params.provider === "kimi"
             ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
-            : "";
+            : params.provider === "firecrawl"
+              ? (params.firecrawlBaseUrl ?? DEFAULT_FIRECRAWL_BASE_URL)
+              : "";
   const cacheKey = normalizeCacheKey(
     params.provider === "brave" && effectiveBraveMode === "llm-context"
       ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.freshness || "default"}`
@@ -1787,6 +1906,33 @@ async function runWebSearch(params: {
     return payload;
   }
 
+  if (params.provider === "firecrawl") {
+    const results = await runFirecrawlSearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      baseUrl: params.firecrawlBaseUrl ?? DEFAULT_FIRECRAWL_BASE_URL,
+      count: params.count,
+      timeoutSeconds: params.timeoutSeconds,
+      language: params.language,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: results.length,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      results,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
   if (params.provider !== "brave") {
     throw new Error("Unsupported web search provider.");
   }
@@ -1931,6 +2077,7 @@ export function createWebSearchTool(options?: {
   const kimiConfig = resolveKimiConfig(search);
   const braveConfig = resolveBraveConfig(search);
   const braveMode = resolveBraveMode(braveConfig);
+  const firecrawlConfig = resolveFirecrawlConfig(search);
 
   const description =
     provider === "perplexity"
@@ -1943,9 +2090,11 @@ export function createWebSearchTool(options?: {
           ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
           : provider === "gemini"
             ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : braveMode === "llm-context"
-              ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
-              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+            : provider === "firecrawl"
+              ? "Search the web using Firecrawl. Returns web search results with titles, URLs, and descriptions."
+              : braveMode === "llm-context"
+                ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
+                : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1969,7 +2118,9 @@ export function createWebSearchTool(options?: {
               ? resolveKimiApiKey(kimiConfig)
               : provider === "gemini"
                 ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+                : provider === "firecrawl"
+                  ? resolveFirecrawlApiKey(firecrawlConfig)
+                  : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
@@ -2000,6 +2151,7 @@ export function createWebSearchTool(options?: {
       if (
         language &&
         provider !== "brave" &&
+        provider !== "firecrawl" &&
         !(provider === "perplexity" && supportsStructuredPerplexityFilters)
       ) {
         return jsonResult({
@@ -2205,6 +2357,7 @@ export function createWebSearchTool(options?: {
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
+        firecrawlBaseUrl: resolveFirecrawlBaseUrl(firecrawlConfig),
         braveMode,
       });
       return jsonResult(result);
@@ -2236,6 +2389,9 @@ export const __testing = {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveFirecrawlConfig,
+  resolveFirecrawlApiKey,
+  resolveFirecrawlBaseUrl,
   resolveRedirectUrl: resolveCitationRedirectUrl,
   resolveBraveMode,
   mapBraveLlmContextResults,
