@@ -30,7 +30,7 @@ export async function pipelineRunCommand(opts: PipelineCliOpts, runtime: Runtime
   const agentOpts: AgentCliOpts = {
     agent: opts.agent,
     message: opts.message,
-    sessionId: executionId,
+    sessionKey: executionId,
     json: opts.json,
     timeout: opts.timeout,
   };
